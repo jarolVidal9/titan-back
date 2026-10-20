@@ -1,22 +1,38 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { after, before, test } from 'node:test';
-import { createApp } from '../src/app.js';
-import { openDb } from '../src/db.js';
+import { createApp } from '../src/app.ts';
+import { openDb, type Db } from '../src/db.ts';
 
-let server;
-let base;
+let server: Server;
+let db: Db;
+let base: string;
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'titan-api-'));
 
 before(async () => {
-  const app = createApp(openDb(':memory:'), { sessionTtlMs: 60_000 });
-  server = app.listen(0);
+  db = await openDb({ url: `file:${path.join(dir, 'test.sqlite').replaceAll('\\', '/')}` });
+  server = createApp(db, { sessionTtlMs: 60_000, corsOrigins: ['http://localhost:4200'] }).listen(0);
   await new Promise((r) => server.once('listening', r));
-  base = `http://127.0.0.1:${server.address().port}`;
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 
-after(() => server.close());
+after(() => {
+  server.close();
+  db.close();
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
+    // En Windows el archivo puede seguir bloqueado un instante; es un directorio temporal.
+  }
+});
 
-async function call(method, path, { token, body } = {}) {
-  const res = await fetch(base + path, {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function call(method: string, url: string, { token, body }: { token?: string; body?: unknown } = {}): Promise<{ status: number; body: any }> {
+  const res = await fetch(base + url, {
     method,
     headers: {
       'content-type': 'application/json',
@@ -26,6 +42,9 @@ async function call(method, path, { token, body } = {}) {
   });
   return { status: res.status, body: res.status === 204 ? null : await res.json() };
 }
+
+const register = async (email: string) =>
+  (await call('POST', '/auth/register', { body: { email, password: 'secreta123' } })).body as { token: string };
 
 test('registro, login, me y logout', async () => {
   const reg = await call('POST', '/auth/register', { body: { email: 'A@Test.com', password: 'secreta123' } });
@@ -47,8 +66,8 @@ test('registro, login, me y logout', async () => {
 });
 
 test('sync: push, pull incremental, last-write-wins y aislamiento entre usuarios', async () => {
-  const { body: u1 } = await call('POST', '/auth/register', { body: { email: 'u1@test.com', password: 'secreta123' } });
-  const { body: u2 } = await call('POST', '/auth/register', { body: { email: 'u2@test.com', password: 'secreta123' } });
+  const u1 = await register('u1@test.com');
+  const u2 = await register('u2@test.com');
 
   const ex = { table: 'exercises', uid: 'ex-1', data: { name: 'Press banca' }, updatedAt: 1000 };
   const first = await call('POST', '/sync', { token: u1.token, body: { deviceId: 'A', since: 0, changes: [ex] } });
@@ -72,7 +91,7 @@ test('sync: push, pull incremental, last-write-wins y aislamiento entre usuarios
   });
   assert.equal(stale.body.applied, 0);
   assert.equal(stale.body.conflicts[0].data.name, 'Press inclinado');
-  assert.deepEqual(stale.body.changes.map((c) => c.data.name), ['Press inclinado']);
+  assert.deepEqual(stale.body.changes.map((c: { data: { name: string } }) => c.data.name), ['Press inclinado']);
 
   // Borrado (tombstone).
   const del = await call('POST', '/sync', {
@@ -88,7 +107,7 @@ test('sync: push, pull incremental, last-write-wins y aislamiento entre usuarios
 });
 
 test('sync: valida la entrada y exige sesión', async () => {
-  const { body: u } = await call('POST', '/auth/register', { body: { email: 'v@test.com', password: 'secreta123' } });
+  const u = await register('v@test.com');
   assert.equal((await call('POST', '/sync', { body: { since: 0 } })).status, 401);
 
   const badTable = await call('POST', '/sync', {
@@ -105,7 +124,7 @@ test('sync: valida la entrada y exige sesión', async () => {
 });
 
 test('sync: paginación con hasMore', async () => {
-  const { body: u } = await call('POST', '/auth/register', { body: { email: 'p@test.com', password: 'secreta123' } });
+  const u = await register('p@test.com');
   const changes = Array.from({ length: 1000 }, (_, i) => ({ table: 'workout_sets', uid: `s-${i}`, data: { reps: i }, updatedAt: 1 }));
   await call('POST', '/sync', { token: u.token, body: { changes } });
   await call('POST', '/sync', { token: u.token, body: { changes: [{ table: 'workout_sets', uid: 'extra', data: {}, updatedAt: 1 }] } });
@@ -117,4 +136,13 @@ test('sync: paginación con hasMore', async () => {
   const page2 = await call('POST', '/sync', { token: u.token, body: { since: page1.body.cursor } });
   assert.equal(page2.body.changes.length, 1);
   assert.equal(page2.body.hasMore, false);
+});
+
+test('CORS solo para los orígenes permitidos', async () => {
+  const ok = await fetch(`${base}/sync`, { method: 'OPTIONS', headers: { origin: 'http://localhost:4200' } });
+  assert.equal(ok.status, 204);
+  assert.equal(ok.headers.get('access-control-allow-origin'), 'http://localhost:4200');
+
+  const other = await fetch(`${base}/sync`, { method: 'OPTIONS', headers: { origin: 'https://otro.com' } });
+  assert.equal(other.headers.get('access-control-allow-origin'), null);
 });

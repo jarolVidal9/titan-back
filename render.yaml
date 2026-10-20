@@ -2,18 +2,19 @@ services:
   - type: web
     name: titan-api
     runtime: node
-    plan: starter # el disco persistente no está disponible en el plan free
-    buildCommand: npm ci
+    plan: free # la BD vive en Turso, no hace falta disco
+    buildCommand: npm ci && npm run typecheck
     startCommand: npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
         value: "24"
-      - key: DATABASE_PATH
-        value: /var/data/titan.sqlite
       - key: SESSION_TTL_DAYS
         value: "90"
-    disk:
-      name: titan-data
-      mountPath: /var/data
-      sizeGB: 1
+      # Se llenan a mano en el panel de Render (no se suben al repo).
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false

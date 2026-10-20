@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import { createClient, type Client } from '@libsql/client';
+
+export type Db = Client;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -33,14 +35,17 @@ CREATE TABLE IF NOT EXISTS records (
   PRIMARY KEY (user_id, tbl, uid)
 );
 CREATE INDEX IF NOT EXISTS idx_records_seq ON records(user_id, seq);
+CREATE INDEX IF NOT EXISTS idx_records_uid ON records(user_id, uid);
 `;
 
-export function openDb(file) {
-  if (file !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
-  const db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
-  db.exec(SCHEMA);
+/**
+ * `url` puede ser Turso (`libsql://…`, con `authToken`) o un archivo local (`file:./data/titan.sqlite`).
+ */
+export async function openDb({ url, authToken }: { url: string; authToken?: string }): Promise<Db> {
+  if (url.startsWith('file:')) {
+    fs.mkdirSync(path.dirname(path.resolve(url.slice('file:'.length))), { recursive: true });
+  }
+  const db = createClient({ url, authToken });
+  await db.executeMultiple(SCHEMA);
   return db;
 }

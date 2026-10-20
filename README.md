@@ -1,19 +1,33 @@
 # TITAN API
 
-Backend de TITAN: sesión y sincronización offline-first. Node + Express 5 + SQLite (better-sqlite3).
+Backend de TITAN: sesión y sincronización offline-first. Node 24 + Express 5 + TypeScript + Turso (libSQL).
+
+Node ejecuta los `.ts` directamente (type stripping), así que no hay paso de compilación; `tsc` solo revisa tipos.
 
 ```bash
 npm install
-npm run dev     # http://localhost:3000 (lee .env si existe)
-npm test
+cp .env.example .env   # y llenar TURSO_DATABASE_URL / TURSO_AUTH_TOKEN
+npm run dev            # http://localhost:3000
+npm run typecheck
+npm test               # usa un SQLite temporal, no toca Turso
 ```
 
-Variables: `PORT`, `DATABASE_PATH` (por defecto `./data/titan.sqlite`), `SESSION_TTL_DAYS` (por defecto 90).
+| Variable             | Por defecto                 |                                                |
+|----------------------|-----------------------------|------------------------------------------------|
+| `TURSO_DATABASE_URL` | `file:./data/titan.sqlite`  | `libsql://…` para Turso, `file:` para local    |
+| `TURSO_AUTH_TOKEN`   | —                           | Token de Turso                                 |
+| `SESSION_TTL_DAYS`   | `90`                        |                                                |
+| `CORS_ORIGINS`       | —                           | Orígenes del front web separados por coma      |
+| `PORT`               | `3000`                      |                                                |
+
+Las tablas se crean solas al arrancar.
 
 ## Despliegue en Render
 
-`render.yaml` crea el servicio con un disco persistente montado en `/var/data`. Sin ese disco
-(plan free) el archivo SQLite se borra en cada deploy o reinicio.
+New → Blueprint → este repo. `render.yaml` crea el servicio en el plan free; en el panel hay que llenar
+`TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` y `CORS_ORIGINS` (no se suben al repo).
+En el plan free el servicio se duerme tras 15 min sin uso y la primera llamada tarda ~1 min; como los clientes
+funcionan offline, solo retrasa la sincronización.
 
 ## Sesión
 
@@ -46,7 +60,7 @@ Push y pull en una sola llamada:
 { "applied": 2, "conflicts": [], "changes": [ … ], "cursor": 42, "hasMore": false }
 ```
 
-- `table`: una de las tablas de la app en snake_case (lista en `src/routes/sync.js`).
+- `table`: una de las tablas de la app en snake_case (lista en `src/routes/sync.ts`).
 - `uid`: id global del registro (UUID). Las referencias dentro de `data` también deben ser UIDs, no los ids locales.
 - `updatedAt`: ms epoch de la última edición. Gana la más reciente (last-write-wins).
 - Borrar = mandar `deleted: true` (tombstone), para que los otros dispositivos se enteren.
