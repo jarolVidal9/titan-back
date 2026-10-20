@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: titan-api
+    runtime: node
+    plan: starter # el disco persistente no está disponible en el plan free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: DATABASE_PATH
+        value: /var/data/titan.sqlite
+      - key: SESSION_TTL_DAYS
+        value: "90"
+    disk:
+      name: titan-data
+      mountPath: /var/data
+      sizeGB: 1
